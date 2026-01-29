@@ -1,0 +1,393 @@
+<head>
+  <link rel="stylesheet" href="/static/style.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+</head>
+
+<main class="frame">
+  <div class="container">
+    <header>
+      <span></span>
+      <span><span id="counter">0</span>/{{counter}}</span>
+    </header>
+
+    <section class="cards">
+      <!-- Articles goes here -->
+
+      <p class="center">
+        There are no more people near you. <br />
+        Please, try again later
+      </p>
+    </section>
+
+    <footer>
+      <button
+        class="undo"
+        style="visibility: hidden"
+        aria-label="undo"
+      ></button>
+      <button class="remove is-big" aria-label="remove"></button>
+      <button class="undo" aria-label="undo"></button>
+      <button class="favorite is-big" aria-label="favorite"></button>
+    </footer>
+  </div>
+
+  <section id="confirmationPage" style="display: none">
+    <h1>Are you sure you want to continue?</h1>
+    <h2>Please check those informations before continuing</h2>
+
+    <button id="finalSubmit">Submit</button>
+
+    <div id="confirmationList"></div>
+  </section>
+</main>
+
+<script
+  src="https://code.jquery.com/jquery-4.0.0.min.js"
+  integrity="sha256-OaVG6prZf4v69dPg6PhVattBXkcOWQB62pdZ3ORyrao="
+  crossorigin="anonymous"
+></script>
+<script>
+  /***************** DATA GENERATION *****************/
+  const cards = document.querySelector(".cards");
+
+  const sentences = [
+    {% for x in sentences %}
+    "{{x}}",
+    {% endfor %}
+
+  ];
+
+  const data = sentences.map((text, i) => ({
+    textId: i + 1,
+    text,
+  }));
+
+  let stack = [...data]; // remaining cards
+  let history = []; // swipe history
+  let approved_texts = []; // right-swiped texts
+
+  // Save the last element at page load
+
+  /***************** END CHECK *****************/
+  let preCheckState = null; // Store state before checkEnd
+
+  function updateCounter() {
+    const counterEl = document.getElementById("counter");
+    if (counterEl) {
+      if (history.length === 0) {
+        counterEl.textContent = 1
+      }
+      else if (history.length === {{counter}}) {
+        counterEl.textContent = history.length;
+      }
+      else {
+      counterEl.textContent = history.length + 1;
+      }
+    }
+  }
+
+  updateCounter();
+
+  function checkEnd() {
+    if (stack.length === 0) {
+      // Save the state before switching to table view
+      preCheckState = {
+        stack: [...stack],
+        history: Array.from(
+          new Map(history.map((item) => [item.textId, item])).values(),
+        ),
+        approved_texts: [...approved_texts],
+        footerHTML: document.querySelector("footer").innerHTML,
+      };
+
+      renderConfirmationTable();
+    }
+  }
+
+  /***************** RENDER CONFIRMATION TABLE *****************/
+  function renderConfirmationTable() {
+    const tableHTML = `
+    <div style="overflow-y: auto; max-height: 65vh;"> {# max height 400px #}
+      <table class="confirmation-table" style="width: 100%; border-collapse: collapse;">
+        <thead>
+          <tr>
+            <th style="text-align: left; padding: 8px; border-bottom: 1px solid #ccc;">Message</th>
+            <th style="text-align: center; padding: 8px; border-bottom: 1px solid #ccc;">Decision</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${history
+            .map(
+              (item) => `
+            <tr>
+              <td style="padding: 8px; border-bottom: 1px solid #eee;">${item.text}</td>
+              <td style="text-align: center; padding: 8px; border-bottom: 1px solid #eee;">
+                ${item.direction === "right" ? "✔" : "❌"}
+              </td>
+            </tr>
+          `,
+            )
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+    cards.innerHTML = tableHTML;
+
+    const footer = document.querySelector("footer");
+    footer.innerHTML = `
+    <button style="background: none" id="revertState">Revert</button>
+    <button style='visibility: hidden'>placeholder</button>
+    <button style="background: none" id="submitFinal">Submit</button>
+    <button style='visibility: hidden'>placeholder</button>
+    <select id="doctype" name="Doc Type">
+      <option value="outline">Outline</option>
+      {# <option value="long">Long</option> #}
+    </select>
+
+  `;
+
+    // Revert button
+    document.getElementById("revertState").addEventListener("click", () => {
+      if (!preCheckState) return;
+
+      stack = [...preCheckState.stack];
+      history = [...preCheckState.history];
+      approved_texts = [...preCheckState.approved_texts];
+
+      // Add last element at page load if missing
+      stack.push(history[history.length - 1]);
+      history.pop();
+      populateInfo();
+      document.querySelector("footer").innerHTML = preCheckState.footerHTML;
+      bindFooterButtons();
+    });
+
+    // Submit button
+    document.getElementById("submitFinal").addEventListener("click", () => {
+      const doctypeValue = document.getElementById("doctype").value;
+
+      $.ajax({
+        url: "/submit-texts",
+        type: "POST",
+        contentType: "application/json",
+        data: JSON.stringify({
+          token: "{{token}}",
+          texts: approved_texts,
+          doctype: doctypeValue,
+        }),
+        success: function (response) {
+          console.log("Success:", response);
+          if (response.redirect) {
+              // Redirect the browser
+              window.location.href = response.redirect;
+          } else {
+              // Handle normal response
+              console.log("Data:", response);
+          }
+        },
+        error: function (err) {
+          console.error("Error:", err);
+        },
+      });
+    });
+  }
+
+  /***************** STATE HANDLING *****************/
+  function handleDecision(direction) {
+    const current = stack.pop();
+    if (!current) return;
+
+    history.push({ ...current, direction });
+
+    if (direction === "right") {
+      approved_texts.push(current);
+    }
+
+    history = Array.from(
+      new Map(history.map((item) => [item.textId, item])).values(),
+    );
+
+    checkEnd();
+    updateCounter();
+  }
+
+  /***************** SWIPE EFFECT *****************/
+  const DECISION_THRESHOLD = 80;
+
+  let startX,
+    startY,
+    card,
+    isAnimating = false,
+    tracedDistance = 0,
+    isHorizontalSwipe = false;
+
+  function startDrag(e) {
+    if (isAnimating) return;
+
+    card = e.target.closest("article");
+    if (!card) return;
+
+    const touch = e.touches?.[0];
+    startX = touch ? touch.pageX : e.pageX;
+    startY = touch ? touch.pageY : e.pageY;
+
+    tracedDistance = 0;
+    isHorizontalSwipe = false;
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onMoveEnd);
+    document.addEventListener("touchmove", onMove, { passive: false });
+    document.addEventListener("touchend", onMoveEnd);
+  }
+
+  function onMove(e) {
+    const touch = e.touches?.[0];
+    const currentX = touch ? touch.pageX : e.pageX;
+    const currentY = touch ? touch.pageY : e.pageY;
+
+    const deltaX = currentX - startX;
+    const deltaY = currentY - startY;
+
+    if (!isHorizontalSwipe) {
+      if (Math.abs(deltaX) > Math.abs(deltaY)) isHorizontalSwipe = true;
+      else return;
+    }
+
+    e.preventDefault();
+    isAnimating = true;
+    tracedDistance = deltaX;
+
+    const rotationDeg = tracedDistance / 10;
+    card.style.transform = `translateX(${tracedDistance}px) rotate(${rotationDeg}deg)`;
+
+    const opacityAmount = Math.min(Math.abs(tracedDistance) / 72, 1);
+    const isRight = tracedDistance >= 0;
+    const opacityEl = isRight
+      ? card.querySelector(".choice-btn.like")
+      : card.querySelector(".choice-btn.nope");
+    if (opacityEl) opacityEl.style.opacity = opacityAmount;
+  }
+
+  function onMoveEnd() {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onMoveEnd);
+    document.removeEventListener("touchmove", onMove);
+    document.removeEventListener("touchend", onMoveEnd);
+
+    const decisionMade = Math.abs(tracedDistance) >= DECISION_THRESHOLD;
+
+    if (decisionMade) {
+      const isLiked = tracedDistance >= 0;
+      handleDecision(isLiked ? "right" : "left");
+
+      card.classList.add(isLiked ? "gone-right" : "gone-left");
+      card.addEventListener("transitionend", () => card.remove());
+    } else card.classList.add("reset-state");
+
+    card.addEventListener("transitionend", () => {
+      card.removeAttribute("style");
+      card.classList.remove("reset-state");
+      tracedDistance = 0;
+      isAnimating = false;
+    });
+
+    card
+      .querySelectorAll(".choice-btn")
+      .forEach((el) => (el.style.opacity = 0));
+  }
+
+  document.addEventListener("mousedown", startDrag);
+  document.addEventListener("touchstart", startDrag, { passive: false });
+
+  /***************** POPULATE INFO *****************/
+  function populateInfo() {
+    cards.innerHTML = "";
+
+    if (stack.length === 0) {
+      cards.innerHTML = `<p class="center">There are no more people near you.<br />Please, try again later</p>`;
+      return;
+    }
+
+    stack.forEach(({ textId, text }) => {
+      cards.innerHTML += `
+      <article data-id="${textId}">
+        <div class="article__content">
+          <h2>${text}</h2>
+        </div>
+        <button class="choice-btn nope" aria-label="reject option">DELETE</button>
+        <button class="choice-btn like" aria-label="accept option">ADD</button>
+      </article>
+    `;
+    });
+
+    bindFooterButtons();
+  }
+
+  populateInfo();
+
+  /***************** BUTTON CONTROLS *****************/
+  function bindFooterButtons() {
+    const removeBtn = document.querySelector(".remove");
+    const favoriteBtn = document.querySelector(".favorite");
+    const undoBtns = document.querySelectorAll(".undo");
+
+    if (removeBtn)
+      removeBtn.onclick = () => {
+        const card = document.querySelector("article:last-child");
+        if (!card) return;
+
+        handleDecision("left");
+        card.classList.add("gone-left");
+        card.remove();
+      };
+
+    if (favoriteBtn)
+      favoriteBtn.onclick = () => {
+        const card = document.querySelector("article:last-child");
+        if (!card) return;
+
+        handleDecision("right");
+        card.classList.add("gone-right");
+        card.remove();
+      };
+
+    undoBtns.forEach((btn) => {
+      btn.onclick = () => {
+        let last = history.pop();
+        if (!last) return;
+
+        // Skip undo for last element at load if already in stack
+        if (
+          last.isLastAtLoad &&
+          stack.some((item) => item.textId === last.textId)
+        )
+          return;
+
+        if (last.direction === "right") {
+          approved_texts = approved_texts.filter(
+            (item) => item.textId !== last.textId,
+          );
+        }
+
+        stack.push({
+          textId: last.textId,
+          text: last.text,
+          isLastAtLoad: last.isLastAtLoad,
+        });
+        populateInfo();
+        updateCounter();
+      };
+    });
+  }
+
+  /***************** DEBUG *****************/
+  window.debugState = () => {
+    console.log("STACK:", stack);
+    console.log("HISTORY:", history);
+    console.log("APPROVED:", approved_texts);
+  };
+</script>
+
+<script src="/static/js_you_dont_mind.js"></script>
